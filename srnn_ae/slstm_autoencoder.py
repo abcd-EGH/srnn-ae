@@ -299,7 +299,7 @@ class SLSTMAutoEncoder(nn.Module):
         
         # 기본 파일 이름 설정
         if file_names is None:
-            file_names = [f'autoencoder_{i}' for i in range(N)]
+            file_names = [f'model{i}' for i in range(N)]
         elif len(file_names) != N:
             raise ValueError("Length of file_names must be equal to N")
         
@@ -393,7 +393,6 @@ if __name__=='__main__':
     output_size = 1
     num_layers = 2
     L = 3
-    file_names = [f'model{i}' for i in range(N)]
 
     model = SLSTMAutoEncoder(
         N=N, 
@@ -402,7 +401,6 @@ if __name__=='__main__':
         output_size=output_size,
         num_layers=num_layers,
         limit_skip_steps=L,
-        file_names=file_names,
         seed=random_seed
     )
 

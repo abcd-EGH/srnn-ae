@@ -323,7 +323,7 @@ class SLSTMAutoEncoder(nn.Module):
                 file_name_enc=file_name_enc,
                 file_name_dec=file_name_dec,
                 partition=partition,
-                **kwargs
+                seed=random_seed + idx,
             )
             self.autoencoders.append(autoencoder)
 

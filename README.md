@@ -39,7 +39,7 @@ pip install git+https://github.com/abcd-EGH/srnn-ae
 
 # Citation
 If you find this code or project useful in your research, please cite the original paper:
-```scss
+```
 @inproceedings{tungbcc19,
   title={Outlier Detection for Time Series with Recurrent Autoencoder Ensembles},
   author={Kieu, Tung and Yang, Bin and Guo, Chenjuan and S. Jensen, Christian},

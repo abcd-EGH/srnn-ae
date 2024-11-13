@@ -279,7 +279,7 @@ class AutoEncoder(nn.Module):
         outputs = self.decoder(targets, encoder_states, load_mask=load_mask)
         return outputs
 
-class EnsembleAutoEncoder(nn.Module):
+class SLSTMAutoEncoder(nn.Module):
     def __init__(self, N, input_size, hidden_size, output_size, num_layers=1, limit_skip_steps=2, 
                  file_names=None, **kwargs):
         """
@@ -293,7 +293,7 @@ class EnsembleAutoEncoder(nn.Module):
             file_names: List of file_names for each AutoEncoder. Length should be N.
             **kwargs: Additional keyword arguments for sRLSTMCell
         """
-        super(EnsembleAutoEncoder, self).__init__()
+        super(SLSTMAutoEncoder, self).__init__()
         self.N = N
         self.autoencoders = nn.ModuleList()
         
@@ -395,7 +395,7 @@ if __name__=='__main__':
     L = 3
     file_names = [f'model{i}' for i in range(N)]
 
-    model = EnsembleAutoEncoder(
+    model = SLSTMAutoEncoder(
         N=N, 
         input_size=input_size,
         hidden_size=hidden_size,

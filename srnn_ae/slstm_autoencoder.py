@@ -41,17 +41,43 @@ class sLSTMCell(nn.Module):
         # Buffer to store past hidden states for skip connection
         self.hidden_buffer = []
 
+        # Initialize mask cache
+        self.mask_cache = {}  # step: (mask_w1, mask_w2)
+
     def _init_directories(self):
         base_dir = f'./weight/{self.file_name}/{self.partition}/{self.component}/{self.type}'
         os.makedirs(base_dir, exist_ok=True)
         self.mask_dir = base_dir
 
     def masked_weight(self, load=False):
-        mask_w1_path = os.path.join(self.mask_dir, f'W1_step_{self.step}.npy')
-        mask_w2_path = os.path.join(self.mask_dir, f'W2_step_{self.step}.npy')
+        # Check if masks for the current step are already in cache
+        if self.step in self.mask_cache:
+            return self.mask_cache[self.step]
 
-        if not load:
-            # Generate masks with (1,0), (0,1), (1,1)
+        if load:
+            # Load masks from cache if available
+            if self.step in self.mask_cache:
+                masked_W1, masked_W2 = self.mask_cache[self.step]
+            else:
+                # Optionally, load from file if you want persistence across sessions
+                mask_w1_path = os.path.join(self.mask_dir, f'W1_step_{self.step}.npy')
+                mask_w2_path = os.path.join(self.mask_dir, f'W2_step_{self.step}.npy')
+                if os.path.exists(mask_w1_path) and os.path.exists(mask_w2_path):
+                    masked_W1 = np.load(mask_w1_path)
+                    masked_W2 = np.load(mask_w2_path)
+                    self.mask_cache[self.step] = (masked_W1, masked_W2)
+                else:
+                    # If masks do not exist, generate them
+                    mask_combined = self.rng.randint(0, 3, size=self.hidden_size)
+                    masked_W1 = (mask_combined == 0) | (mask_combined == 2)
+                    masked_W2 = (mask_combined == 1) | (mask_combined == 2)
+
+                    masked_W1 = masked_W1.astype(np.float32)
+                    masked_W2 = masked_W2.astype(np.float32)
+
+                    self.mask_cache[self.step] = (masked_W1, masked_W2)
+        else:
+            # Generate new masks and cache them
             mask_combined = self.rng.randint(0, 3, size=self.hidden_size)
             masked_W1 = (mask_combined == 0) | (mask_combined == 2)
             masked_W2 = (mask_combined == 1) | (mask_combined == 2)
@@ -59,27 +85,10 @@ class sLSTMCell(nn.Module):
             masked_W1 = masked_W1.astype(np.float32)
             masked_W2 = masked_W2.astype(np.float32)
 
-            # Save masks
-            np.save(mask_w1_path, masked_W1)
-            np.save(mask_w2_path, masked_W2)
-        else:
-            # Load masks
-            if os.path.exists(mask_w1_path) and os.path.exists(mask_w2_path):
-                masked_W1 = np.load(mask_w1_path)
-                masked_W2 = np.load(mask_w2_path)
-            else:
-                # If masks do not exist, generate them
-                mask_combined = self.rng.randint(0, 3, size=self.hidden_size)
-                masked_W1 = (mask_combined == 0) | (mask_combined == 2)
-                masked_W2 = (mask_combined == 1) | (mask_combined == 2)
-
-                masked_W1 = masked_W1.astype(np.float32)
-                masked_W2 = masked_W2.astype(np.float32)
-
-                np.save(mask_w1_path, masked_W1)
-                np.save(mask_w2_path, masked_W2)
+            self.mask_cache[self.step] = (masked_W1, masked_W2)
 
         # Convert masks to torch tensors
+        masked_W1, masked_W2 = self.mask_cache[self.step]
         tf_mask_W1 = torch.tensor(masked_W1, dtype=torch.float32, device=self.weight_h_2.device)
         tf_mask_W2 = torch.tensor(masked_W2, dtype=torch.float32, device=self.weight_h_2.device)
         return tf_mask_W1, tf_mask_W2
@@ -128,16 +137,23 @@ class sLSTMCell(nn.Module):
         self.step = 0
 
     def save_masks(self):
-        """Save current masks to files."""
-        mask_w1, mask_w2 = self.masked_weight(load=False)
-        # Masks are already saved in masked_weight when load=False
-        # So no additional action is needed here
-        pass
+        """Optionally save current masks to files."""
+        for step, (masked_W1, masked_W2) in self.mask_cache.items():
+            mask_w1_path = os.path.join(self.mask_dir, f'W1_step_{step}.npy')
+            mask_w2_path = os.path.join(self.mask_dir, f'W2_step_{step}.npy')
+            np.save(mask_w1_path, masked_W1)
+            np.save(mask_w2_path, masked_W2)
 
     def load_masks(self):
-        """Load masks from files for the current step."""
-        mask_w1, mask_w2 = self.masked_weight(load=True)
-        return mask_w1, mask_w2
+        """Optionally load masks from files if needed."""
+        # Example: Load specific step's masks
+        step = self.step
+        mask_w1_path = os.path.join(self.mask_dir, f'W1_step_{step}.npy')
+        mask_w2_path = os.path.join(self.mask_dir, f'W2_step_{step}.npy')
+        if os.path.exists(mask_w1_path) and os.path.exists(mask_w2_path):
+            masked_W1 = np.load(mask_w1_path)
+            masked_W2 = np.load(mask_w2_path)
+            self.mask_cache[step] = (masked_W1, masked_W2)
 
 class Encoder(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1, skip_steps=1, file_name='enc', partition=1, **kwargs):

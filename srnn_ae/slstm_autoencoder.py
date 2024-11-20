@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import random
-from utils import set_random_seed
+from utils import set_random_seed, hyperparameter_setting
 
 class sLSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size, forget_bias=1.0, dense=None,
@@ -373,21 +373,7 @@ class SLSTMAutoEncoder(nn.Module):
 if __name__=='__main__':
     # 랜덤 시드 설정
     set_random_seed()
-
-    """
-    <Outlier Detection for Time Series with Recurrent Autoencoder Ensembles>
-    [Hyperparameters Settings]
-    For all deep learning based methods, we use
-    Adadelta [Zeiler, 2012] as the optimizer, and we set
-    their learning rates to 10e-3.
-    ...
-    we set the number of hidden LSTM units to 8;
-    we set the default number of autoencoders N to
-    40, and we also study the effect of varying N from 10 to 40;
-    and we set λ to 0.005.
-    ...
-    For MP, we set the pattern size to 10. ### I think MP is Markov Process, and the pattern size is the state space of MP.
-    """
+    args = hyperparameter_setting()
 
     # 하이퍼파라미터 설정
     N = 10  # 앙상블 모델 수, 10 or 40

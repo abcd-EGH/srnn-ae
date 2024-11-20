@@ -64,6 +64,7 @@ def hyperparameter_setting(**kwargs):
     args['batch_size'] = kwargs['batch_size'] if 'batch_size' in kwargs else 32
     args['window_size'] = kwargs['window_size'] if 'window_size' in kwargs else 10
     args['num_epochs'] = kwargs['num_epochs'] if 'num_epochs' in kwargs else 100
+    args['random_seed'] = kwargs['random_seed'] if 'random_seed' in kwargs else 777
 
     return args
 

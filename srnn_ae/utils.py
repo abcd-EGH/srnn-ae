@@ -72,7 +72,7 @@ def hyperparameter_setting(**kwargs):
 
     return args
 
-def ReadNABDataset(_file_name, _normalize=True):
+def read_dataset(_file_name, _normalize=True):
     '''
     <Outlier Detection for Time Series with Recurrent Autoencoder Ensembles>
     [4.1 Experimental Setup - Data Sets]

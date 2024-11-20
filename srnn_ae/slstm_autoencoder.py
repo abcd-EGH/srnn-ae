@@ -297,7 +297,7 @@ class AutoEncoder(nn.Module):
 
 class SLSTMAutoEncoder(nn.Module):
     def __init__(self, N, input_size, hidden_size, output_size, num_layers=1, limit_skip_steps=2, 
-                 file_names=None, **kwargs):
+                 file_names=None, seed=777, **kwargs):
         """
         Args:
             N: Number of AutoEncoders in the ensemble
@@ -339,7 +339,7 @@ class SLSTMAutoEncoder(nn.Module):
                 file_name_enc=file_name_enc,
                 file_name_dec=file_name_dec,
                 partition=partition,
-                seed=random_seed + idx,
+                seed=seed+idx,
             )
             self.autoencoders.append(autoencoder)
 
@@ -369,8 +369,13 @@ class SLSTMAutoEncoder(nn.Module):
             for cell in autoencoder.decoder.cells:
                 cell.reset_step()
 
-def set_random_seed(seed):
-    os.environ['PYTHONHASHSEED'] = str(seed)
+def set_random_seed(seed=777):
+    '''
+    Args:
+        seed: int, random seed, default=777
+    Returns:
+        None
+    '''
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -383,9 +388,7 @@ def set_random_seed(seed):
 
 if __name__=='__main__':
     # 랜덤 시드 설정
-    random_seed = 777
-
-    set_random_seed(random_seed)
+    set_random_seed()
 
     """
     <Outlier Detection for Time Series with Recurrent Autoencoder Ensembles>
@@ -417,7 +420,6 @@ if __name__=='__main__':
         output_size=output_size,
         num_layers=num_layers,
         limit_skip_steps=L,
-        seed=random_seed
     )
 
     # 학습 파라미터 설정 (epoch 수는 수정, 다른 파라미터는 고정)

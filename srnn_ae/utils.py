@@ -1,9 +1,14 @@
 import torch
 import random
 import numpy as np
+import pandas as pd
+import json
+import os
+from sklearn.preprocessing import MinMaxScaler
 
 def set_random_seed(seed=777):
     '''
+    Fix random seed for reproducibility of results.
     Args:
         seed: int, random seed, default=777
     Returns:
@@ -22,10 +27,9 @@ def set_random_seed(seed=777):
 def hyperparameter_setting(**kwargs):
     """
     <Outlier Detection for Time Series with Recurrent Autoencoder Ensembles>
-    [Hyperparameters Settings]
-    For all deep learning based methods, we use
-    Adadelta [Zeiler, 2012] as the optimizer, and we set
-    their learning rates to 10e-3.
+    [4.1 Experimental Setup - Hyperparameters Settings]
+    For all deep learning based methods, we use Adadelta [Zeiler, 2012] as the optimizer, 
+    and we set their learning rates to 10e-3.
     ...
     we set the number of hidden LSTM units to 8;
     we set the default number of autoencoders N to
@@ -67,6 +71,43 @@ def hyperparameter_setting(**kwargs):
     args['random_seed'] = kwargs['random_seed'] if 'random_seed' in kwargs else 777
 
     return args
+
+def ReadNABDataset(_file_name, _normalize=True):
+    '''
+    <Outlier Detection for Time Series with Recurrent Autoencoder Ensembles>
+    [4.1 Experimental Setup - Data Sets]
+    For both repositories (NAB & ECG), ground truth labels of outlier observations are available.
+    However, consistent with the unsupervised setting, we do not use these labels for training,
+    but only use them for evaluating accuracy.
+    '''
+    with open('./NAB/labels/combined_windows.json') as data_file:
+        json_label = json.load(data_file)
+    abnormal = pd.read_csv(_file_name, header=0, index_col=0)
+    abnormal['label'] = 1
+    relative_path = os.path.relpath(_file_name, './NAB/data')
+    relative_path = relative_path.replace(os.sep, '/')  # 경로 구분자를 '/'로 통일
+    
+    print(f"Processing file: {relative_path}")  # 현재 처리 중인 파일명 출력
+    
+    list_windows = json_label.get(relative_path)
+    for window in list_windows:
+        start = window[0]
+        end = window[1]
+        abnormal.loc[start:end, 'label'] = -1
+
+    abnormal_data = abnormal['value'].values # as_matrix() no longer works.
+    # abnormal_preprocessing_data = np.reshape(abnormal_preprocessing_data, (abnormal_preprocessing_data.shape[0], 1))
+    abnormal_label = abnormal['label'].values # as_matrix() no longer works.
+
+    abnormal_data = np.expand_dims(abnormal_data, axis=1)
+    abnormal_label = np.expand_dims(abnormal_label, axis=1)
+
+    if _normalize==True:
+        scaler = MinMaxScaler(feature_range=(0, 1))
+        abnormal_data = scaler.fit_transform(abnormal_data)
+
+    # Normal = 1, Abnormal = -1
+    return abnormal_data, abnormal_label
 
 if __name__ == '__main__':
     set_random_seed()

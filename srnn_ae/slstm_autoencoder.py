@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 import random
-from utils import set_random_seed, hyperparameter_setting
 
 class sLSTMCell(nn.Module):
     def __init__(self, input_size, hidden_size, forget_bias=1.0, dense=None,
@@ -371,10 +370,6 @@ class SLSTMAutoEncoder(nn.Module):
                 cell.reset_step()
 
 if __name__=='__main__':
-    # 랜덤 시드 설정
-    set_random_seed()
-    args = hyperparameter_setting()
-
     # 하이퍼파라미터 설정
     N = 10  # 앙상블 모델 수, 10 or 40
     input_size = 1  # 단일 시계열

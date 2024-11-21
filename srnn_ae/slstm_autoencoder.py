@@ -19,21 +19,21 @@ class sLSTMCell(nn.Module):
         # Initialize the main LSTM cell
         self.lstm = nn.LSTMCell(input_size, hidden_size)
 
-        # Initialize weights of LSTM cell with He initialization
+        # Initialize weights of LSTM cell with Xavier initialization
         for name, param in self.lstm.named_parameters():
             if 'weight' in name:
-                nn.init.kaiming_normal_(param, mode='fan_in', nonlinearity='leaky_relu')
+                nn.init.xavier_normal_(param)
             elif 'bias' in name:
                 nn.init.zeros_(param)
 
         # Initialize additional weights and biases
         self.weight_h_2 = nn.Parameter(torch.Tensor(hidden_size, hidden_size))
         self.bias_h_2 = nn.Parameter(torch.Tensor(hidden_size))
-        nn.init.kaiming_normal_(self.weight_h_2, mode='fan_in', nonlinearity='leaky_relu')
+        nn.init.xavier_normal_(self.weight_h_2)
         nn.init.zeros_(self.bias_h_2)
 
-        # Activation function is now LeakyReLU
-        self.activation = torch.nn.LeakyReLU()
+        # Activation function is now back to Tanh
+        self.activation = torch.tanh
 
         # Initialize mask generator with seed for reproducibility
         if seed is not None:
@@ -92,8 +92,8 @@ class sLSTMCell(nn.Module):
         else:
             h_skip = torch.zeros_like(h)  # 초기화: 충분한 이전 스텝이 없을 경우 0으로 채움
 
-        # Compute new_h_2 using skip connection with LeakyReLU activation
-        new_h_2 = torch.nn.functional.leaky_relu(torch.matmul(h_skip, self.weight_h_2) + self.bias_h_2)
+        # Compute new_h_2 using skip connection with Sigmoid activation
+        new_h_2 = torch.sigmoid(torch.matmul(h_skip, self.weight_h_2) + self.bias_h_2)
 
         # Get masks
         mask_w1, mask_w2 = self.masked_weight()

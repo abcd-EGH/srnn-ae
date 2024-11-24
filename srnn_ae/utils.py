@@ -330,35 +330,48 @@ def test(model, dataloader, device, total_length, actual_data, h):
             inputs = inputs.to(device)
             targets = targets.to(device)
             labels = labels.numpy()
-    
+
             # 모델 입력 형태로 변환
             inputs = inputs.permute(1, 0, 2)  # (window_size, batch_size, input_size)
             targets = targets.permute(1, 0, 2)
-    
+
             # 모델 예측
             outputs = model(inputs, targets)  # (seq_len, batch_size, output_size)
-    
+
             # 출력 형태 복원
             outputs = outputs.permute(1, 0, 2).cpu().numpy()  # (batch_size, window_size, output_size)
             targets = targets.permute(1, 0, 2).cpu().numpy()
-    
+
             batch_size = outputs.shape[0]
             for i in range(batch_size):
                 start = dataloader.dataset.stride * (batch_idx * dataloader.batch_size + i)
                 end = start + dataloader.dataset.window_size
+                if end > total_length:
+                    # 윈도우가 데이터 범위를 벗어나지 않도록 조정
+                    end = total_length
+                    start = end - dataloader.dataset.window_size
+                    if start < 0:
+                        start = 0
+                        end = dataloader.dataset.window_size
+
                 # 재구성 값 합산
                 reconstructed_sum[start:end] += outputs[i,:,0]
                 # 재구성 횟수 카운트
                 reconstructed_counts[start:end] += 1
-    
+
                 # MSE 계산
                 mse = np.mean((outputs[i] - targets[i])**2)
                 all_errors.append(mse)
                 all_labels.extend(labels[i].tolist())
-    
-    # 평균 재구성 값 계산
-    reconstructed_data = reconstructed_sum / reconstructed_counts
-    
+
+    # 평균 재구성 값 계산 (0으로 나누는 것을 방지)
+    reconstructed_data = np.divide(
+        reconstructed_sum, 
+        reconstructed_counts, 
+        out=np.zeros_like(reconstructed_sum), 
+        where=reconstructed_counts!=0
+    )
+
     all_errors = np.array(all_errors)
     all_labels = np.array(all_labels)
 

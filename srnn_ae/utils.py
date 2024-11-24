@@ -9,6 +9,14 @@ from torch.utils.data import Dataset
 import matplotlib.pyplot as plt
 import time
 import datetime
+from sklearn.metrics import (
+    precision_score, recall_score, f1_score, 
+    roc_auc_score, average_precision_score, 
+    cohen_kappa_score, roc_curve, precision_recall_curve,
+    confusion_matrix
+)
+import seaborn as sns
+from arch import arch_model
 
 class TimeSeriesDataset(Dataset):
     def __init__(self, data, labels, window_size, stride=1):
@@ -301,87 +309,254 @@ def train(model, dataloader, criterion, optimizer, device, l1_lambda, num_epochs
     # 그래프 표시
     plt.show()
 
-def test(model, dataloader, device, total_length, actual_data, h):
+def find_anomaly_windows(labels, anomaly_label=-1):
     """
-    For testing model.
+    Find contiguous anomaly windows in the label array.
+    """
+    windows = []
+    in_anomaly = False
+    start = 0
 
+    for i, label in enumerate(labels):
+        if label == anomaly_label and not in_anomaly:
+            in_anomaly = True
+            start = i
+        elif label != anomaly_label and in_anomaly:
+            in_anomaly = False
+            end = i - 1
+            windows.append((start, end))
+
+    if in_anomaly:
+        windows.append((start, len(labels) - 1))
+
+    return windows
+
+def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels, moving_avg_window=20, k=2, threshold_percentile=95, threshold_method='static', scaling_factor=10):
+    """
+    For testing the anomaly detection model on time-step level labels with various thresholding methods.
+    
     Args:
-        model (nn.Module): 학습 완료 모델
-        dataloader (DataLoader): 테스트 데이터 로더
-        device (torch.device): 테스트 디바이스
-        total_length (int): 데이터 총 길이
-        actual_data (torch.tensor): 실제 데이터 (예측값과 비교)
-        h (str): 가설 넘버 e.g. H1
+        model (nn.Module): Trained model
+        dataloader (DataLoader): Test data loader
+        device (torch.device): Device to run the model on
+        total_length (int): Total length of the dataset
+        actual_data (np.ndarray): Actual data for comparison and plotting
+        h (str): Hypothesis number or identifier (e.g., 'H1')
+        anomaly_labels (np.ndarray): 1D array of labels (1 for normal, -1 for anomaly)
+        moving_avg_window (int): Window size for moving average (default: 20)
+        k (float): Multiplier for standard deviation in threshold (default: 2)
+        threshold_percentile (float): Percentile to set the static threshold (default: 95)
+        threshold_method (str): Thresholding method ('static', 'moving_avg', 'garch')
+        scaling_factor (float): Factor to scale reconstruction errors for GARCH modeling (default: 10)
 
     Returns:
-        all_errors (np.array): error 값
-        all_labels (np.array): labels
-        reconstructed_data (float): 평균 재구성 값
+        None
     """
     model.eval()
-    all_errors = []
-    all_labels = []
-    
-    reconstructed_sum = np.zeros((total_length,))  # 재구성 값의 합
-    reconstructed_counts = np.zeros((total_length,))  # 재구성에 기여한 횟수
-    
+    all_errors = np.zeros(total_length)  # Reconstruction error per timestep
+    error_counts = np.zeros(total_length)  # Number of times each timestep is covered by a window
+    reconstructed_data = np.zeros(total_length)  # Reconstructed data per timestep
+    reconstructed_counts = np.zeros(total_length)  # Number of times each timestep is reconstructed
+
     with torch.no_grad():
         for batch_idx, (inputs, targets, labels) in enumerate(dataloader):
             inputs = inputs.to(device)
             targets = targets.to(device)
-            labels = labels.numpy()
+            # Assuming labels are per-timestep, flatten if needed
+            labels = labels.numpy().flatten()  # Flatten to 1D array if it's 2D
 
-            # 모델 입력 형태로 변환
+            # Adjust input shape for the model
             inputs = inputs.permute(1, 0, 2)  # (window_size, batch_size, input_size)
             targets = targets.permute(1, 0, 2)
 
-            # 모델 예측
+            # Model prediction
             outputs = model(inputs, targets)  # (seq_len, batch_size, output_size)
 
-            # 출력 형태 복원
+            # Restore output shape
             outputs = outputs.permute(1, 0, 2).cpu().numpy()  # (batch_size, window_size, output_size)
-            targets = targets.permute(1, 0, 2).cpu().numpy()
+            targets = targets.permute(1, 0, 2).cpu().numpy()  # (batch_size, window_size, output_size)
 
             batch_size = outputs.shape[0]
+            window_size = dataloader.dataset.window_size
+            stride = dataloader.dataset.stride
+
             for i in range(batch_size):
-                start = dataloader.dataset.stride * (batch_idx * dataloader.batch_size + i)
-                end = start + dataloader.dataset.window_size
+                # Calculate window start and end indices
+                start = stride * (batch_idx * dataloader.batch_size + i)
+                end = start + window_size
                 if end > total_length:
-                    # 윈도우가 데이터 범위를 벗어나지 않도록 조정
+                    # Adjust window to fit within the data range
                     end = total_length
-                    start = end - dataloader.dataset.window_size
+                    start = end - window_size
                     if start < 0:
                         start = 0
-                        end = dataloader.dataset.window_size
+                        end = window_size
 
-                # 재구성 값 합산
-                reconstructed_sum[start:end] += outputs[i,:,0]
-                # 재구성 횟수 카운트
+                # Calculate per-timestep MSE
+                mse_per_timestep = (outputs[i,:,0] - targets[i,:,0]) ** 2  # Assuming output size is 1
+
+                # Accumulate reconstruction error
+                current_window_size = end - start
+                if len(mse_per_timestep) != current_window_size:
+                    print(f"Warning: mse_per_timestep length {len(mse_per_timestep)} does not match window slice length {current_window_size}. Adjusting.")
+                    mse_per_timestep = mse_per_timestep[:current_window_size]
+
+                all_errors[start:end] += mse_per_timestep
+                error_counts[start:end] += 1
+
+                # Accumulate reconstructed data
+                reconstructed_window = outputs[i,:,0]
+                if len(reconstructed_window) != current_window_size:
+                    print(f"Warning: reconstructed_window length {len(reconstructed_window)} does not match window slice length {current_window_size}. Adjusting.")
+                    reconstructed_window = reconstructed_window[:current_window_size]
+                reconstructed_data[start:end] += reconstructed_window
                 reconstructed_counts[start:end] += 1
 
-                # MSE 계산
-                mse = np.mean((outputs[i] - targets[i])**2)
-                all_errors.append(mse)
-                all_labels.extend(labels[i].tolist())
-
-    # 평균 재구성 값 계산 (0으로 나누는 것을 방지)
-    reconstructed_data = np.divide(
-        reconstructed_sum, 
-        reconstructed_counts, 
-        out=np.zeros_like(reconstructed_sum), 
-        where=reconstructed_counts!=0
+    # Calculate average reconstruction error per timestep
+    all_errors = np.divide(
+        all_errors,
+        error_counts,
+        out=np.zeros_like(all_errors),
+        where=error_counts != 0
     )
 
-    all_errors = np.array(all_errors)
-    all_labels = np.array(all_labels)
+    # Calculate average reconstructed data per timestep
+    reconstructed_data = np.divide(
+        reconstructed_data,
+        reconstructed_counts,
+        out=np.zeros_like(reconstructed_data),
+        where=reconstructed_counts != 0
+    )
+
+    # Convert anomaly_labels to binary (1 for anomaly, 0 for normal)
+    binary_labels = (anomaly_labels.flatten() == -1).astype(int)
 
     print("Testing Complete.")
-    # window 및 stride로 인한 actual_data와 reconstructed_data의 길이 불일치 해결
-    min_length = min(len(actual_data), len(reconstructed_data))
-    actual_data = actual_data[:min_length]
-    reconstructed_data = reconstructed_data[:min_length]
 
-    # 플롯
+    # Initialize threshold and predictions
+    if threshold_method == 'static':
+        # Static Threshold based on percentile
+        threshold = np.percentile(all_errors, threshold_percentile)
+        print(f"Using static Reconstruction Error Threshold ({threshold_percentile}th percentile): {threshold:.6f}")
+        predictions = (all_errors > threshold).astype(int)
+
+    elif threshold_method == 'moving_avg':
+        # Dynamic Threshold based on moving average and std
+        errors_series = pd.Series(all_errors)
+        moving_avg = errors_series.rolling(window=moving_avg_window, min_periods=1).mean()
+        moving_std = errors_series.rolling(window=moving_avg_window, min_periods=1).std().fillna(0)
+        dynamic_threshold = moving_avg + k * moving_std
+        threshold = dynamic_threshold.values  # Convert to NumPy array
+        print(f"Using dynamic Reconstruction Error Threshold based on {moving_avg_window}-window moving average and {k}*std")
+        predictions = (all_errors > threshold).astype(int)
+
+    elif threshold_method == 'garch':
+        # Dynamic Threshold based on GARCH model
+        print("Fitting GARCH(1,1) model on scaled reconstruction errors...")
+        try:
+            # 스케일링 적용
+            reconstruction_errors_scaled = all_errors * scaling_factor
+
+            # NaN 값 처리
+            reconstruction_errors_scaled = np.nan_to_num(reconstruction_errors_scaled, nan=0.0)
+
+            # GARCH 모델 적합 (mean='Constant' 명시적으로 설정)
+            am = arch_model(reconstruction_errors_scaled, vol='Garch', p=1, q=1, mean='Constant', rescale=False)
+            res = am.fit(disp='off', show_warning=False)
+
+            # 속성 확인
+            if hasattr(res, 'conditional_volatility'):
+                cond_vol = res.conditional_volatility
+            else:
+                print("Error: 'conditional_volatility' not found in ARCHModelResult.")
+
+            # 임계값 계산: conditional_mean + k * conditional_volatility
+            threshold_scaled = k * cond_vol
+
+            # 임계값을 원래 스케일로 변환
+            threshold = threshold_scaled / scaling_factor
+
+            # 임계값의 길이를 데이터 길이에 맞춤
+            threshold = threshold[:total_length]
+
+            print(f"Using GARCH-based Dynamic Reconstruction Error Threshold with k={k}")
+            predictions = (all_errors > threshold).astype(int)
+
+        except Exception as e:
+            print(f"Error fitting GARCH model: {e}")
+
+    else:
+        raise ValueError("Invalid threshold_method. Choose from 'static', 'moving_avg', 'garch'.")
+
+    # Calculate classification metrics
+    precision = precision_score(binary_labels, predictions, zero_division=0)
+    recall = recall_score(binary_labels, predictions, zero_division=0)
+    f1 = f1_score(binary_labels, predictions, zero_division=0)
+    try:
+        roc_auc = roc_auc_score(binary_labels, all_errors)
+        pr_auc = average_precision_score(binary_labels, all_errors)
+    except ValueError as e:
+        print(f"ROC AUC and PR AUC cannot be calculated: {e}")
+        roc_auc = None
+        pr_auc = None
+    cohen_kappa = cohen_kappa_score(binary_labels, predictions)
+
+    print("[Classification Metrics]")
+    print(f"Precision: {precision:.4f}")
+    print(f"Recall: {recall:.4f}")
+    print(f"F1-Score: {f1:.4f}")
+    if roc_auc is not None:
+        print(f"ROC AUC: {roc_auc:.4f}")
+    else:
+        print("ROC AUC: Undefined")
+    if pr_auc is not None:
+        print(f"PR AUC: {pr_auc:.4f}")
+    else:
+        print("PR AUC: Undefined")
+    print(f"Cohen Kappa: {cohen_kappa:.4f}")
+    print()
+
+    # Plot Reconstruction Error with Threshold and Predictions
+    plt.figure(figsize=(15, 6))
+    plt.plot(all_errors, label='Reconstruction Error', color='blue')
+    if threshold_method == 'static':
+        plt.axhline(y=threshold, color='red', linestyle='--', label='Threshold')
+    elif threshold_method == 'moving_avg':
+        plt.plot(dynamic_threshold, color='red', linestyle='--', label='Dynamic Threshold')
+    elif threshold_method == 'garch':
+        plt.plot(threshold, color='red', linestyle='--', label='GARCH Dynamic Threshold')
+
+    # Highlight Predictions
+    TP = (binary_labels == 1) & (predictions == 1)
+    FP = (binary_labels == 0) & (predictions == 1)
+    FN = (binary_labels == 1) & (predictions == 0)
+    # TN = (binary_labels == 0) & (predictions == 0)  # Not used in plotting
+
+    # Ensure TP, FP, FN are NumPy arrays
+    TP = TP if isinstance(TP, np.ndarray) else TP.to_numpy()
+    FP = FP if isinstance(FP, np.ndarray) else FP.to_numpy()
+    FN = FN if isinstance(FN, np.ndarray) else FN.to_numpy()
+
+    # Scatter plots
+    plt.scatter(np.where(TP)[0], all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
+    plt.scatter(np.where(FP)[0], all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
+    plt.scatter(np.where(FN)[0], all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
+
+    plt.title('Reconstruction Error with Anomaly Detection')
+    plt.xlabel('Timestep Index')
+    plt.ylabel('Reconstruction Error')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+
+    # Save and show the plot
+    os.makedirs(h, exist_ok=True)
+    plot_path = os.path.join(h, f'reconstruction_error_{threshold_method}_threshold.png')
+    plt.savefig(plot_path)
+    print(f"Reconstruction error plot saved to {plot_path}")
+    plt.show()
+
+    # Plot Actual Data vs Reconstructed Data
     plt.figure(figsize=(15, 6))
     plt.plot(actual_data, label='Actual Data', color='blue')
     plt.plot(reconstructed_data, label='Reconstructed Data', color='orange', alpha=0.7)
@@ -391,14 +566,94 @@ def test(model, dataloader, device, total_length, actual_data, h):
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    
-    # 그래프를 파일로 저장
-    os.makedirs(h, exist_ok=True)
-    plot_path = os.path.join(h, 'actual_vs_reconstructed.png')
-    plt.savefig(plot_path)
-    print(f"Actual vs Reconstructed data plot saved to {plot_path}")
-    
-    # 그래프 표시
+
+    # Save and show the plot
+    actual_recon_plot_path = os.path.join(h, 'actual_vs_reconstructed_data.png')
+    plt.savefig(actual_recon_plot_path)
+    print(f"Actual vs Reconstructed Data plot saved to {actual_recon_plot_path}")
     plt.show()
-    
-    return all_errors, all_labels, reconstructed_data
+
+    # ROC Curve Visualization
+    if roc_auc is not None:
+        fpr, tpr, _ = roc_curve(binary_labels, all_errors)
+        plt.figure(figsize=(10, 6))
+        plt.plot(fpr, tpr, label=f'ROC Curve (AUC = {roc_auc:.4f})', color='darkorange')
+        plt.plot([0, 1], [0, 1], 'k--')
+        plt.title('Receiver Operating Characteristic (ROC) Curve')
+        plt.xlabel('False Positive Rate')
+        plt.ylabel('True Positive Rate')
+        plt.legend(loc='lower right')
+        plt.grid(True)
+        plt.tight_layout()
+        roc_plot_path = os.path.join(h, 'roc_curve_all_data.png')
+        plt.savefig(roc_plot_path)
+        print(f"ROC curve plot saved to {roc_plot_path}")
+        plt.show()
+
+    # Precision-Recall Curve Visualization
+    if pr_auc is not None:
+        precision_vals, recall_vals, _ = precision_recall_curve(binary_labels, all_errors)
+        plt.figure(figsize=(10, 6))
+        plt.plot(recall_vals, precision_vals, label=f'PR Curve (AUC = {pr_auc:.4f})', color='navy')
+        plt.title('Precision-Recall (PR) Curve')
+        plt.xlabel('Recall')
+        plt.ylabel('Precision')
+        plt.legend(loc='lower left')
+        plt.grid(True)
+        plt.tight_layout()
+        pr_plot_path = os.path.join(h, 'pr_curve_all_data.png')
+        plt.savefig(pr_plot_path)
+        print(f"PR curve plot saved to {pr_plot_path}")
+        plt.show()
+
+    # Confusion Matrix Visualization
+    cm = confusion_matrix(binary_labels, predictions)
+
+    plt.figure(figsize=(6, 5))
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=['Normal', 'Anomaly'], yticklabels=['Normal', 'Anomaly'])
+    plt.xlabel('Predicted Label')
+    plt.ylabel('True Label')
+    plt.title('Confusion Matrix')
+    plt.tight_layout()
+
+    confusion_plot_path = os.path.join(h, 'confusion_matrix.png')
+    plt.savefig(confusion_plot_path)
+    print(f"Confusion matrix plot saved to {confusion_plot_path}")
+    plt.show()
+
+    # Optional: Plot Anomaly Windows on Reconstruction Error Plot
+    # Find anomaly windows from anomaly_labels
+    anomaly_windows = find_anomaly_windows(binary_labels, anomaly_label=1)  # Assuming 1 is anomaly
+
+    if anomaly_windows:
+        plt.figure(figsize=(15, 6))
+        plt.plot(all_errors, label='Reconstruction Error', color='blue')
+        if threshold_method == 'static':
+            plt.axhline(y=threshold, color='red', linestyle='--', label='Threshold')
+        elif threshold_method == 'moving_avg':
+            plt.plot(dynamic_threshold, color='red', linestyle='--', label='Dynamic Threshold')
+        elif threshold_method == 'garch':
+            plt.plot(threshold, color='red', linestyle='--', label='GARCH Dynamic Threshold')
+
+        # Highlight Predictions
+        plt.scatter(np.where(TP)[0], all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
+        plt.scatter(np.where(FP)[0], all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
+        plt.scatter(np.where(FN)[0], all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
+
+        # Highlight Anomaly Windows
+        for idx, window in enumerate(anomaly_windows):
+            start, end = window
+            plt.axvspan(start, end, color='red', alpha=0.3, label='Anomaly' if idx == 0 else "")
+
+        plt.title('Reconstruction Error with Anomaly Detection and Anomaly Windows')
+        plt.xlabel('Timestep Index')
+        plt.ylabel('Reconstruction Error')
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+
+        # Save and show the plot
+        anomaly_plot_path = os.path.join(h, f'reconstruction_error_with_anomalies_{threshold_method}.png')
+        plt.savefig(anomaly_plot_path)
+        print(f"Reconstruction error with anomalies plot saved to {anomaly_plot_path}")
+        plt.show()

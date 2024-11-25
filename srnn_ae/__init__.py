@@ -1,5 +1,5 @@
 # SLSTMAutoEncoder와 SGRUAutoEncoder 모듈의 주요 클래스를 임포트
-from .slstm_autoencoder import SLAEE
+from .SLAEE import SLAEE
 from .utils import set_random_seed, hyperparameter_setting, read_dataset, TimeSeriesDataset, data_plot_with_anomalies, train, \
 compute_reconstruction_errors, evaluate_and_visualize
 # from .SLSTMVAE import SLSTMVAE # 새로운 클래스 추가 시 임포트

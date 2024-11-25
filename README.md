@@ -26,10 +26,10 @@ git clone https://github.com/numenta/NAB.git
 This implementation includes improved models with several additional features to improve outlier detection performance.
 
 ## Base Model
-- SLAEE: Ensemble of Sparsely Connection LSTM and AutoEncoder
+- ESLAE: Ensemble of Sparsely Connection LSTM and AutoEncoder
 
 ## Advanced Model
-- RSLAEE: Ensemble of Residual & Sparsely Connection LSTM and AutoEncoder
+- ERSLAE: Ensemble of Residual & Sparsely Connection LSTM and AutoEncoder
 
 # Installation
 ```bash

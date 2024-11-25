@@ -405,7 +405,7 @@ def compute_reconstruction_errors(model, dataloader, device, total_length, anoma
     return all_errors, reconstructed_data, binary_labels
 
 def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual_data, h, threshold_method='static',
-                           moving_avg_window=20, k=2, threshold_percentile=95, scaling_factor=10):
+                           moving_avg_window=20, k=2, threshold_percentile=95):
     """
     Evaluates the reconstruction errors, applies thresholding, calculates metrics, and generates visualizations.
     
@@ -419,7 +419,6 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
         moving_avg_window (int): Window size for moving average (default: 20)
         k (float): Multiplier for standard deviation in threshold (default: 2)
         threshold_percentile (float): Percentile to set the static threshold (default: 95)
-        scaling_factor (float): Factor to scale reconstruction errors for GARCH modeling (default: 10)
     
     Returns:
         None
@@ -449,23 +448,25 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
         print("Fitting GARCH(1,1) model on scaled reconstruction errors...")
         try:
             # Apply scaling
+            scaling_factor = np.std(all_errors) # Standard deviation scaling
             reconstruction_errors_scaled = all_errors * scaling_factor
 
             # Handle NaN values
             reconstruction_errors_scaled = np.nan_to_num(reconstruction_errors_scaled, nan=0.0)
 
             # Fit GARCH model (explicitly set mean='Constant')
-            am = arch_model(reconstruction_errors_scaled, vol='Garch', p=1, q=1, mean='Constant', rescale=False)
+            am = arch_model(reconstruction_errors_scaled, vol='Garch', p=1, q=1, mean='Zero', rescale=False)
             res = am.fit(disp='off', show_warning=False)
+            print(res.summary())
 
             # Check for conditional_volatility attribute
             if hasattr(res, 'conditional_volatility'):
                 cond_vol = res.conditional_volatility
             else:
                 raise AttributeError("Error: 'conditional_volatility' not found in ARCHModelResult.")
-
-            # Calculate threshold: conditional_mean + k * conditional_volatility
-            threshold_scaled = res.mean + k * cond_vol
+            
+            # Calculate threshold: k * conditional_volatility
+            threshold_scaled = k * cond_vol
 
             # Convert threshold back to original scale
             threshold = threshold_scaled / scaling_factor

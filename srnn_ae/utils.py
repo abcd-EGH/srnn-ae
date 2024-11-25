@@ -309,48 +309,19 @@ def train(model, dataloader, criterion, optimizer, device, l1_lambda, num_epochs
     # 그래프 표시
     plt.show()
 
-def find_anomaly_windows(labels, anomaly_label=-1):
+def compute_reconstruction_errors(model, dataloader, device, total_length, anomaly_labels):
     """
-    Find contiguous anomaly windows in the label array.
-    """
-    windows = []
-    in_anomaly = False
-    start = 0
-
-    for i, label in enumerate(labels):
-        if label == anomaly_label and not in_anomaly:
-            in_anomaly = True
-            start = i
-        elif label != anomaly_label and in_anomaly:
-            in_anomaly = False
-            end = i - 1
-            windows.append((start, end))
-
-    if in_anomaly:
-        windows.append((start, len(labels) - 1))
-
-    return windows
-
-def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels, moving_avg_window=20, k=2, threshold_percentile=95, threshold_method='static', scaling_factor=10):
-    """
-    For testing the anomaly detection model on time-step level labels with various thresholding methods.
+    Runs the model on the test data and computes reconstruction errors and reconstructed data.
     
     Args:
         model (nn.Module): Trained model
         dataloader (DataLoader): Test data loader
         device (torch.device): Device to run the model on
         total_length (int): Total length of the dataset
-        actual_data (np.ndarray): Actual data for comparison and plotting
-        h (str): Hypothesis number or identifier (e.g., 'H1')
         anomaly_labels (np.ndarray): 1D array of labels (1 for normal, -1 for anomaly)
-        moving_avg_window (int): Window size for moving average (default: 20)
-        k (float): Multiplier for standard deviation in threshold (default: 2)
-        threshold_percentile (float): Percentile to set the static threshold (default: 95)
-        threshold_method (str): Thresholding method ('static', 'moving_avg', 'garch')
-        scaling_factor (float): Factor to scale reconstruction errors for GARCH modeling (default: 10)
-
+    
     Returns:
-        None
+        tuple: A tuple containing all_errors, reconstructed_data, binary_labels.
     """
     model.eval()
     all_errors = np.zeros(total_length)  # Reconstruction error per timestep
@@ -362,8 +333,6 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
         for batch_idx, (inputs, targets, labels) in enumerate(dataloader):
             inputs = inputs.to(device)
             targets = targets.to(device)
-            # Assuming labels are per-timestep, flatten if needed
-            labels = labels.numpy().flatten()  # Flatten to 1D array if it's 2D
 
             # Adjust input shape for the model
             inputs = inputs.permute(1, 0, 2)  # (window_size, batch_size, input_size)
@@ -392,8 +361,8 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
                         start = 0
                         end = window_size
 
-                # Calculate per-timestep MSE
-                mse_per_timestep = (outputs[i,:,0] - targets[i,:,0]) ** 2  # Assuming output size is 1
+                # Calculate per-timestep MSE (assuming output size is 1)
+                mse_per_timestep = (outputs[i,:,0] - targets[i,:,0]) ** 2
 
                 # Accumulate reconstruction error
                 current_window_size = end - start
@@ -433,6 +402,31 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
 
     print("Testing Complete.")
 
+    return all_errors, reconstructed_data, binary_labels
+
+def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual_data, h, threshold_method='static',
+                           moving_avg_window=20, k=2, threshold_percentile=95, scaling_factor=10):
+    """
+    Evaluates the reconstruction errors, applies thresholding, calculates metrics, and generates visualizations.
+    
+    Args:
+        all_errors (np.ndarray): Reconstruction error per timestep
+        reconstructed_data (np.ndarray): Reconstructed data per timestep
+        binary_labels (np.ndarray): Binary labels (1 for anomaly, 0 for normal)
+        actual_data (np.ndarray): Actual data for comparison and plotting
+        h (str): Hypothesis identifier or folder name (e.g., 'H1')
+        threshold_method (str): Thresholding method ('static', 'moving_avg', 'garch')
+        moving_avg_window (int): Window size for moving average (default: 20)
+        k (float): Multiplier for standard deviation in threshold (default: 2)
+        threshold_percentile (float): Percentile to set the static threshold (default: 95)
+        scaling_factor (float): Factor to scale reconstruction errors for GARCH modeling (default: 10)
+    
+    Returns:
+        None
+    """
+    # Determine the total length from all_errors if not provided
+    total_length = len(all_errors)
+
     # Initialize threshold and predictions
     if threshold_method == 'static':
         # Static Threshold based on percentile
@@ -454,29 +448,29 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
         # Dynamic Threshold based on GARCH model
         print("Fitting GARCH(1,1) model on scaled reconstruction errors...")
         try:
-            # 스케일링 적용
+            # Apply scaling
             reconstruction_errors_scaled = all_errors * scaling_factor
 
-            # NaN 값 처리
+            # Handle NaN values
             reconstruction_errors_scaled = np.nan_to_num(reconstruction_errors_scaled, nan=0.0)
 
-            # GARCH 모델 적합 (mean='Constant' 명시적으로 설정)
+            # Fit GARCH model (explicitly set mean='Constant')
             am = arch_model(reconstruction_errors_scaled, vol='Garch', p=1, q=1, mean='Constant', rescale=False)
             res = am.fit(disp='off', show_warning=False)
 
-            # 속성 확인
+            # Check for conditional_volatility attribute
             if hasattr(res, 'conditional_volatility'):
                 cond_vol = res.conditional_volatility
             else:
-                print("Error: 'conditional_volatility' not found in ARCHModelResult.")
+                raise AttributeError("Error: 'conditional_volatility' not found in ARCHModelResult.")
 
-            # 임계값 계산: conditional_mean + k * conditional_volatility
-            threshold_scaled = k * cond_vol
+            # Calculate threshold: conditional_mean + k * conditional_volatility
+            threshold_scaled = res.mean + k * cond_vol
 
-            # 임계값을 원래 스케일로 변환
+            # Convert threshold back to original scale
             threshold = threshold_scaled / scaling_factor
 
-            # 임계값의 길이를 데이터 길이에 맞춤
+            # Ensure threshold length matches total_length
             threshold = threshold[:total_length]
 
             print(f"Using GARCH-based Dynamic Reconstruction Error Threshold with k={k}")
@@ -484,6 +478,7 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
 
         except Exception as e:
             print(f"Error fitting GARCH model: {e}")
+            return  # Exit the function if GARCH fails
 
     else:
         raise ValueError("Invalid threshold_method. Choose from 'static', 'moving_avg', 'garch'.")
@@ -516,7 +511,10 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
     print(f"Cohen Kappa: {cohen_kappa:.4f}")
     print()
 
-    # Plot Reconstruction Error with Threshold and Predictions
+    # Create directory for plots
+    os.makedirs(h, exist_ok=True)
+
+    # 1. Plot Reconstruction Error with Threshold and Predictions
     plt.figure(figsize=(15, 6))
     plt.plot(all_errors, label='Reconstruction Error', color='blue')
     if threshold_method == 'static':
@@ -530,17 +528,16 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
     TP = (binary_labels == 1) & (predictions == 1)
     FP = (binary_labels == 0) & (predictions == 1)
     FN = (binary_labels == 1) & (predictions == 0)
-    # TN = (binary_labels == 0) & (predictions == 0)  # Not used in plotting
 
-    # Ensure TP, FP, FN are NumPy arrays
-    TP = TP if isinstance(TP, np.ndarray) else TP.to_numpy()
-    FP = FP if isinstance(FP, np.ndarray) else FP.to_numpy()
-    FN = FN if isinstance(FN, np.ndarray) else FN.to_numpy()
+    # Extract indices
+    TP_indices = np.where(TP)[0]
+    FP_indices = np.where(FP)[0]
+    FN_indices = np.where(FN)[0]
 
     # Scatter plots
-    plt.scatter(np.where(TP)[0], all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
-    plt.scatter(np.where(FP)[0], all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
-    plt.scatter(np.where(FN)[0], all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
+    plt.scatter(TP_indices, all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
+    plt.scatter(FP_indices, all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
+    plt.scatter(FN_indices, all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
 
     plt.title('Reconstruction Error with Anomaly Detection')
     plt.xlabel('Timestep Index')
@@ -550,13 +547,12 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
     plt.tight_layout()
 
     # Save and show the plot
-    os.makedirs(h, exist_ok=True)
     plot_path = os.path.join(h, f'reconstruction_error_{threshold_method}_threshold.png')
     plt.savefig(plot_path)
     print(f"Reconstruction error plot saved to {plot_path}")
     plt.show()
 
-    # Plot Actual Data vs Reconstructed Data
+    # 2. Plot Actual Data vs Reconstructed Data
     plt.figure(figsize=(15, 6))
     plt.plot(actual_data, label='Actual Data', color='blue')
     plt.plot(reconstructed_data, label='Reconstructed Data', color='orange', alpha=0.7)
@@ -573,7 +569,7 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
     print(f"Actual vs Reconstructed Data plot saved to {actual_recon_plot_path}")
     plt.show()
 
-    # ROC Curve Visualization
+    # 3. ROC Curve Visualization
     if roc_auc is not None:
         fpr, tpr, _ = roc_curve(binary_labels, all_errors)
         plt.figure(figsize=(10, 6))
@@ -590,7 +586,7 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
         print(f"ROC curve plot saved to {roc_plot_path}")
         plt.show()
 
-    # Precision-Recall Curve Visualization
+    # 4. Precision-Recall Curve Visualization
     if pr_auc is not None:
         precision_vals, recall_vals, _ = precision_recall_curve(binary_labels, all_errors)
         plt.figure(figsize=(10, 6))
@@ -606,7 +602,7 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
         print(f"PR curve plot saved to {pr_plot_path}")
         plt.show()
 
-    # Confusion Matrix Visualization
+    # 5. Confusion Matrix Visualization
     cm = confusion_matrix(binary_labels, predictions)
 
     plt.figure(figsize=(6, 5))
@@ -621,8 +617,33 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
     print(f"Confusion matrix plot saved to {confusion_plot_path}")
     plt.show()
 
-    # Optional: Plot Anomaly Windows on Reconstruction Error Plot
-    # Find anomaly windows from anomaly_labels
+    # 6. Highlight Anomaly Windows on Reconstruction Error Plot
+    def find_anomaly_windows(labels, anomaly_label=1):
+        """
+        Identifies contiguous anomaly windows in the labels.
+        
+        Args:
+            labels (np.ndarray): Binary labels (1 for anomaly, 0 for normal)
+            anomaly_label (int): Label indicating an anomaly
+        
+        Returns:
+            List of tuples: Each tuple contains (start_index, end_index) of an anomaly window
+        """
+        anomaly_windows = []
+        in_window = False
+        start = 0
+        for i, label in enumerate(labels):
+            if label == anomaly_label and not in_window:
+                in_window = True
+                start = i
+            elif label != anomaly_label and in_window:
+                in_window = False
+                end = i - 1
+                anomaly_windows.append((start, end))
+        if in_window:
+            anomaly_windows.append((start, len(labels) - 1))
+        return anomaly_windows
+
     anomaly_windows = find_anomaly_windows(binary_labels, anomaly_label=1)  # Assuming 1 is anomaly
 
     if anomaly_windows:
@@ -636,9 +657,9 @@ def test(model, dataloader, device, total_length, actual_data, h, anomaly_labels
             plt.plot(threshold, color='red', linestyle='--', label='GARCH Dynamic Threshold')
 
         # Highlight Predictions
-        plt.scatter(np.where(TP)[0], all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
-        plt.scatter(np.where(FP)[0], all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
-        plt.scatter(np.where(FN)[0], all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
+        plt.scatter(TP_indices, all_errors[TP], marker='o', color='green', label='True Positives (TP)', s=10)
+        plt.scatter(FP_indices, all_errors[FP], marker='x', color='orange', label='False Positives (FP)', s=10)
+        plt.scatter(FN_indices, all_errors[FN], marker='x', color='purple', label='False Negatives (FN)', s=10)
 
         # Highlight Anomaly Windows
         for idx, window in enumerate(anomaly_windows):

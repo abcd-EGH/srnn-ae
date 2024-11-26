@@ -2,12 +2,12 @@ import torch
 import torch.nn as nn
 
 # Bidirectional LSTM AutoEncoder model class
-class BiLSTMAutoEncoder(nn.Module):
+class BLAE(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers):
         '''
         encoder와 decoder의 종류, 레이어 수 등을 정의
         '''
-        super(BiLSTMAutoEncoder, self).__init__()
+        super(BLAE, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.encoder = nn.LSTM(input_size, hidden_size, num_layers, batch_first=True, bidirectional=True)

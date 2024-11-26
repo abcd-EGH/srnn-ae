@@ -180,34 +180,37 @@ class Decoder(nn.Module):
             )
             for i in range(num_layers)
         ])
-        # 최종 출력을 위한 선형 레이어
         self.output_layer = nn.Linear(hidden_size, output_size)
 
-    def forward(self, targets, encoder_states):
+    def forward(self, targets, encoder_states, encoder_hidden_states):
         """
         Args:
             targets: Tensor of shape (seq_len, batch_size, output_size)
             encoder_states: List of (h, c) tuples from the encoder
+            encoder_hidden_states: Tensor of shape (seq_len, batch_size, hidden_size)
         Returns:
             outputs: Reconstructed outputs of shape (seq_len, batch_size, output_size)
         """
         batch_size = targets.size(1)
         seq_len = targets.size(0)
 
-        # 인코더의 마지막 상태를 디코더의 초기 상태로 사용
-        h = [state[0].detach() for state in encoder_states]  # detach to prevent gradients flowing back to encoder
+        h = [state[0].detach() for state in encoder_states]
         c = [state[1].detach() for state in encoder_states]
         states = list(zip(h, c))
 
         outputs = []
-        # 각 타임스텝에 대해 순환
         for t in range(seq_len):
             input_t = targets[t]
+            encoder_hidden_t = encoder_hidden_states[t]
+
+            # 인코더 히든 상태와 디코더 입력을 결합
+            input_t = torch.cat([input_t, encoder_hidden_t], dim=-1)
+
             for i, cell in enumerate(self.cells):
                 h_i, c_i = states[i]
                 h_i, (h_i, c_i) = cell(input_t, (h_i, c_i))
                 states[i] = (h_i, c_i)
-                input_t = h_i  # 다음 레이어의 입력으로 현재 레이어의 출력을 사용
+                input_t = h_i
             output_t = self.output_layer(input_t)
             outputs.append(output_t)
         outputs = torch.stack(outputs, dim=0)
@@ -244,8 +247,8 @@ class AutoEncoder(nn.Module):
         Returns:
             outputs: Reconstructed outputs of shape (seq_len, batch_size, output_size)
         """
-        encoder_outputs, encoder_states = self.encoder(inputs)
-        outputs = self.decoder(targets, encoder_states)
+        encoder_outputs, encoder_states, encoder_hidden_states = self.encoder(inputs)
+        outputs = self.decoder(targets, encoder_states, encoder_hidden_states)
         return outputs
 
 class ECSLAE(nn.Module):

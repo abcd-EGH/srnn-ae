@@ -126,7 +126,15 @@ def read_dataset(_file_name, _normalize=True):
     '''
     with open('./NAB/labels/combined_windows.json') as data_file:
         json_label = json.load(data_file)
+    
     abnormal = pd.read_csv(_file_name, header=0, index_col=0)
+    
+    # 인덱스를 datetime 형식으로 변환
+    if not pd.api.types.is_datetime64_any_dtype(abnormal.index):
+        abnormal.index = pd.to_datetime(abnormal.index)
+    
+    abnormal = abnormal.sort_index()  # 인덱스 정렬
+    
     abnormal['label'] = 1
     relative_path = os.path.relpath(_file_name, './NAB/data')
     relative_path = relative_path.replace(os.sep, '/')  # 경로 구분자를 '/'로 통일
@@ -134,22 +142,39 @@ def read_dataset(_file_name, _normalize=True):
     print(f"Processing file: {relative_path}")  # 현재 처리 중인 파일명 출력
     
     list_windows = json_label.get(relative_path)
+    
+    if list_windows is None:
+        print(f"{relative_path}에 대한 윈도우가 combined_windows.json에 없습니다.")
+        return abnormal['value'].values.reshape(-1, 1), abnormal['label'].values.reshape(-1, 1)
+    
     for window in list_windows:
-        start = window[0]
-        end = window[1]
-        abnormal.loc[start:end, 'label'] = -1
-
-    abnormal_data = abnormal['value'].values # as_matrix() no longer works.
-    # abnormal_preprocessing_data = np.reshape(abnormal_preprocessing_data, (abnormal_preprocessing_data.shape[0], 1))
-    abnormal_label = abnormal['label'].values # as_matrix() no longer works.
-
-    abnormal_data = np.expand_dims(abnormal_data, axis=1)
-    abnormal_label = np.expand_dims(abnormal_label, axis=1)
-
-    if _normalize==True:
+        start_str, end_str = window[0], window[1]
+        try:
+            # 윈도우 시작과 끝을 datetime으로 변환
+            start = pd.to_datetime(start_str)
+            end = pd.to_datetime(end_str)
+            
+            # 시작과 끝이 인덱스에 존재하는지 확인
+            if start not in abnormal.index or end not in abnormal.index:
+                print(f"타임스탬프 누락으로 인해 윈도우 {start} ~ {end}를 건너뜁니다.")
+                continue  # 해당 윈도우 건너뜀
+            
+            # 윈도우에 해당하는 레이블을 -1로 설정
+            abnormal.loc[start:end, 'label'] = -1
+        except Exception as e:
+            print(f"윈도우 {window} 처리 중 오류 발생: {e}")
+            continue  # 오류 발생 시 해당 윈도우 건너뜀
+    
+    abnormal_data = abnormal['value'].values
+    abnormal_label = abnormal['label'].values
+    
+    abnormal_data = abnormal_data.reshape(-1, 1)
+    abnormal_label = abnormal_label.reshape(-1, 1)
+    
+    if _normalize:
         scaler = MinMaxScaler(feature_range=(0, 1))
         abnormal_data = scaler.fit_transform(abnormal_data)
-
+    
     # Normal = 1, Abnormal = -1
     return abnormal_data, abnormal_label
 

@@ -321,13 +321,12 @@ def train(model, dataloader, criterion, optimizer, device, l1_lambda, num_epochs
     plt.tight_layout()
     
     # 그래프를 파일로 저장
-    os.makedirs(h, exist_ok=True)
-    plot_path = os.path.join(h, 'training_loss.png')
+    plot_path = os.path.join('results', h, 'training_loss.png')
     plt.savefig(plot_path)
     print(f"Training loss plot saved to {plot_path}")
 
     loss_df = pd.DataFrame({'epoch': range(1, num_epochs + 1), 'loss': epoch_losses})
-    loss_path = os.path.join(h, 'training_loss.csv')
+    loss_path = os.path.join('results', h, 'training_loss.csv')
     loss_df.to_csv(loss_path, index=False)
     print(f"Training loss saved to {loss_path}")
 
@@ -537,9 +536,6 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
     print(f"Cohen Kappa: {cohen_kappa:.4f}")
     print()
 
-    # Create directory for plots
-    os.makedirs(h, exist_ok=True)
-
     # 1. Plot Reconstruction Error with Threshold and Predictions
     plt.figure(figsize=(15, 6))
     plt.plot(all_errors, label='Reconstruction Error', color='blue')
@@ -573,7 +569,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
     plt.tight_layout()
 
     # Save and show the plot
-    plot_path = os.path.join(h, f'reconstruction_error_{threshold_method}_threshold.png')
+    plot_path = os.path.join('results', h, f'reconstruction_error_{threshold_method}_threshold.png')
     plt.savefig(plot_path)
     print(f"Reconstruction error plot saved to {plot_path}")
     plt.show()
@@ -590,7 +586,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
     plt.tight_layout()
 
     # Save and show the plot
-    actual_recon_plot_path = os.path.join(h, 'actual_vs_reconstructed_data.png')
+    actual_recon_plot_path = os.path.join('results', h, 'actual_vs_reconstructed_data.png')
     plt.savefig(actual_recon_plot_path)
     print(f"Actual vs Reconstructed Data plot saved to {actual_recon_plot_path}")
     plt.show()
@@ -607,7 +603,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
         plt.legend(loc='lower right')
         plt.grid(True)
         plt.tight_layout()
-        roc_plot_path = os.path.join(h, 'roc_curve_all_data.png')
+        roc_plot_path = os.path.join('results', h, 'roc_curve_all_data.png')
         plt.savefig(roc_plot_path)
         print(f"ROC curve plot saved to {roc_plot_path}")
         plt.show()
@@ -623,7 +619,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
         plt.legend(loc='lower left')
         plt.grid(True)
         plt.tight_layout()
-        pr_plot_path = os.path.join(h, 'pr_curve_all_data.png')
+        pr_plot_path = os.path.join('results', h, 'pr_curve_all_data.png')
         plt.savefig(pr_plot_path)
         print(f"PR curve plot saved to {pr_plot_path}")
         plt.show()
@@ -638,7 +634,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
     plt.title('Confusion Matrix')
     plt.tight_layout()
 
-    confusion_plot_path = os.path.join(h, 'confusion_matrix.png')
+    confusion_plot_path = os.path.join('results', h, 'confusion_matrix.png')
     plt.savefig(confusion_plot_path)
     print(f"Confusion matrix plot saved to {confusion_plot_path}")
     plt.show()
@@ -700,7 +696,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
         plt.tight_layout()
 
         # Save and show the plot
-        anomaly_plot_path = os.path.join(h, f'reconstruction_error_with_anomalies_{threshold_method}.png')
+        anomaly_plot_path = os.path.join('results', h, f'reconstruction_error_with_anomalies_{threshold_method}.png')
         plt.savefig(anomaly_plot_path)
         print(f"Reconstruction error with anomalies plot saved to {anomaly_plot_path}")
         plt.show()

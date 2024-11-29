@@ -321,6 +321,7 @@ def train(model, dataloader, criterion, optimizer, device, l1_lambda, num_epochs
     plt.tight_layout()
     
     # 그래프를 파일로 저장
+    os.makedirs(os.path.join('results', h), exist_ok=True)
     plot_path = os.path.join('results', h, 'training_loss.png')
     plt.savefig(plot_path)
     print(f"Training loss plot saved to {plot_path}")
@@ -569,6 +570,7 @@ def evaluate_and_visualize(all_errors, reconstructed_data, binary_labels, actual
     plt.tight_layout()
 
     # Save and show the plot
+    os.makedirs(os.path.join('results', h), exist_ok=True)
     plot_path = os.path.join('results', h, f'reconstruction_error_{threshold_method}_threshold.png')
     plt.savefig(plot_path)
     print(f"Reconstruction error plot saved to {plot_path}")

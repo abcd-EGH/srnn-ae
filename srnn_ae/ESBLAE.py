@@ -135,8 +135,8 @@ class OriginalEncoder(nn.Module):
         Args:
             inputs: Tensor of shape (seq_len, batch_size, input_size)
         Returns:
-            outputs: List of final hidden states for each layer
-            states: List of final (h, c) tuples for each layer
+            encoder_outputs: Tensor of shape (seq_len, batch_size, hidden_size)
+            final_states: List of final (h, c) tuples for each layer
         """
         batch_size = inputs.size(1)
         seq_len = inputs.size(0)
@@ -146,6 +146,8 @@ class OriginalEncoder(nn.Module):
         c = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
         states = list(zip(h, c))
 
+        encoder_outputs = []
+
         # 각 타임스텝에 대해 순환
         for t in range(seq_len):
             input_t = inputs[t]
@@ -154,8 +156,11 @@ class OriginalEncoder(nn.Module):
                 h_i, (h_i, c_i) = cell(input_t, (h_i, c_i))
                 states[i] = (h_i, c_i)
                 input_t = h_i  # 다음 레이어의 입력으로 현재 레이어의 출력을 사용
-        outputs = [state[0] for state in states]  # 각 레이어의 마지막 은닉 상태
-        return outputs, states
+            encoder_outputs.append(input_t)
+
+        encoder_outputs = torch.stack(encoder_outputs, dim=0)  # Shape: (seq_len, batch_size, hidden_size)
+        final_states = states
+        return encoder_outputs, final_states
 
 class BidirectionalEncoder(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1, skip_steps=1, file_name='enc', partition=1, **kwargs):
@@ -198,8 +203,8 @@ class BidirectionalEncoder(nn.Module):
         Args:
             inputs: Tensor of shape (seq_len, batch_size, input_size)
         Returns:
-            outputs: List of final hidden states for each layer (forward and backward concatenated)
-            states: List of final (h, c) tuples for each layer and direction
+            encoder_outputs: Tensor of shape (seq_len, batch_size, hidden_size*2)
+            final_states: List of final (h, c) tuples for each layer and direction
         """
         batch_size = inputs.size(1)
         seq_len = inputs.size(0)
@@ -213,8 +218,10 @@ class BidirectionalEncoder(nn.Module):
         c_backward = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
         states_backward = list(zip(h_backward, c_backward))
 
-        # Forward pass
         forward_outputs = []
+        backward_outputs = []
+
+        # Forward pass
         for t in range(seq_len):
             input_t = inputs[t]
             for i, cell in enumerate(self.forward_cells):
@@ -225,7 +232,6 @@ class BidirectionalEncoder(nn.Module):
             forward_outputs.append(input_t)
 
         # Backward pass
-        backward_outputs = []
         for t in reversed(range(seq_len)):
             input_t = inputs[t]
             for i, cell in enumerate(self.backward_cells):
@@ -240,23 +246,21 @@ class BidirectionalEncoder(nn.Module):
         for f_out, b_out in zip(forward_outputs, backward_outputs):
             combined = torch.cat((f_out, b_out), dim=1)  # Shape: (batch_size, hidden_size*2)
             combined_outputs.append(combined)
-        combined_outputs = torch.stack(combined_outputs, dim=0)  # Shape: (seq_len, batch_size, hidden_size*2)
+        encoder_outputs = torch.stack(combined_outputs, dim=0)  # Shape: (seq_len, batch_size, hidden_size*2)
 
         # Concatenate final states from forward and backward
-        final_outputs = []
         final_states = []
         for i in range(self.num_layers):
             combined_hidden = torch.cat((states_forward[i][0], states_backward[i][0]), dim=1)  # (batch_size, hidden_size*2)
-            final_outputs.append(combined_hidden)
-            combined_state = (torch.cat((states_forward[i][0], states_backward[i][0]), dim=1),
-                              torch.cat((states_forward[i][1], states_backward[i][1]), dim=1))
+            combined_cell = torch.cat((states_forward[i][1], states_backward[i][1]), dim=1)    # (batch_size, hidden_size*2)
+            combined_state = (combined_hidden, combined_cell)
             final_states.append(combined_state)
 
-        return final_outputs, final_states
+        return encoder_outputs, final_states
 
-class Encoder(nn.Module):
+class EncoderModule(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers=1, skip_steps=1, file_name='enc', partition=1, bidirectional=True, **kwargs):
-        super(Encoder, self).__init__()
+        super(EncoderModule, self).__init__()
         self.hidden_size = hidden_size
         self.num_layers = num_layers
         self.bidirectional = bidirectional
@@ -289,8 +293,8 @@ class Encoder(nn.Module):
         Args:
             inputs: Tensor of shape (seq_len, batch_size, input_size)
         Returns:
-            outputs: List of final hidden states for each layer
-            states: List of final (h, c) tuples for each layer
+            encoder_outputs: Tensor of shape (seq_len, batch_size, hidden_size * (2 if bidirectional else 1))
+            final_states: List of final (h, c) tuples for each layer
         """
         return self.encoder(inputs)
 
@@ -302,15 +306,25 @@ class Decoder(nn.Module):
         self.num_layers = num_layers
         self.bidirectional_encoder = bidirectional_encoder
 
-        # Adjust hidden size if encoder is bidirectional
-        decoder_input_size = output_size  # 기본적으로 output_size로 시작
+        # Define MultiheadAttention
+        # Ensure that embed_dim is divisible by num_heads
+        # Here, hidden_size=8, set num_heads=2
+        num_heads = 2
+        if hidden_size % num_heads != 0:
+            raise ValueError(f"hidden_size {hidden_size} is not divisible by num_heads {num_heads}")
+        self.attention = nn.MultiheadAttention(embed_dim=hidden_size, num_heads=num_heads, batch_first=False)
+
+        # If bidirectional_encoder, project encoder_outputs to hidden_size
         if self.bidirectional_encoder:
-            decoder_input_size = output_size  # 필요 시 어텐션 메커니즘 등에서 추가 조정 가능
+            self.encoder_proj = nn.Linear(hidden_size * 2, hidden_size)
+        else:
+            self.encoder_proj = None
 
         # sLSTMCell을 다층 구조로 사용하기 위해 ModuleList로 저장
+        # 디코더의 첫 번째 레이어는 output_size를 입력으로, 이후 레이어는 hidden_size를 입력으로 사용
         self.cells = nn.ModuleList([
             sLSTMCell(
-                decoder_input_size if i == 0 else hidden_size,
+                output_size if i == 0 else hidden_size,
                 hidden_size,
                 type='dec',
                 component=i+1,
@@ -324,10 +338,11 @@ class Decoder(nn.Module):
         # 최종 출력을 위한 선형 레이어
         self.output_layer = nn.Linear(hidden_size, output_size)
 
-    def forward(self, targets, encoder_states):
+    def forward(self, targets, encoder_outputs, encoder_states):
         """
         Args:
             targets: Tensor of shape (seq_len, batch_size, output_size)
+            encoder_outputs: Tensor of shape (seq_len, batch_size, hidden_size * (2 if bidirectional_encoder else 1))
             encoder_states: List of (h, c) tuples from the encoder
         Returns:
             outputs: Reconstructed outputs of shape (seq_len, batch_size, output_size)
@@ -344,21 +359,46 @@ class Decoder(nn.Module):
         # 각 타임스텝에 대해 순환
         for t in range(seq_len):
             input_t = targets[t]
+
+            # Pass through decoder cells
+            decoder_layer_outputs = []
             for i, cell in enumerate(self.cells):
                 h_i, c_i = states[i]
                 h_i, (h_i, c_i) = cell(input_t, (h_i, c_i))
                 states[i] = (h_i, c_i)
                 input_t = h_i  # 다음 레이어의 입력으로 현재 레이어의 출력을 사용
-            output_t = self.output_layer(input_t)
+                decoder_layer_outputs.append(h_i)
+
+            # Attention mechanism
+            # Query: 현재 디코더의 마지막 레이어의 출력 (batch_size, hidden_size)
+            # Key & Value: 인코더의 모든 타임스텝 출력 (seq_len, batch_size, hidden_size * 2 if bidirectional)
+            query = decoder_layer_outputs[-1].unsqueeze(0)  # (1, batch_size, hidden_size)
+            if self.bidirectional_encoder:
+                key = self.encoder_proj(encoder_outputs)  # (seq_len, batch_size, hidden_size)
+                value = self.encoder_proj(encoder_outputs)
+            else:
+                key = encoder_outputs  # (seq_len, batch_size, hidden_size)
+                value = encoder_outputs
+
+            # Compute attention
+            attn_output, attn_weights = self.attention(query, key, value)  # attn_output: (1, batch_size, hidden_size)
+            attn_output = attn_output.squeeze(0)  # (batch_size, hidden_size)
+
+            # Combine attention output with decoder's current layer output
+            combined_input = decoder_layer_outputs[-1] + attn_output  # (batch_size, hidden_size)
+
+            # Pass through output layer
+            output_t = self.output_layer(combined_input)
             outputs.append(output_t)
-        outputs = torch.stack(outputs, dim=0)
+
+        outputs = torch.stack(outputs, dim=0)  # Shape: (seq_len, batch_size, output_size)
         return outputs
 
 class AutoEncoder(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers=1, skip_steps=1,
                  file_name_enc='enc', file_name_dec='dec', partition=1, bidirectional=True, **kwargs):
         super(AutoEncoder, self).__init__()
-        self.encoder = Encoder(
+        self.encoder = EncoderModule(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
@@ -388,7 +428,7 @@ class AutoEncoder(nn.Module):
             outputs: Reconstructed outputs of shape (seq_len, batch_size, output_size)
         """
         encoder_outputs, encoder_states = self.encoder(inputs)
-        outputs = self.decoder(targets, encoder_states)
+        outputs = self.decoder(targets, encoder_outputs, encoder_states)
         return outputs
 
 class ESBLAE(nn.Module):
@@ -403,6 +443,7 @@ class ESBLAE(nn.Module):
             num_layers: Number of layers in each AutoEncoder
             limit_skip_steps: Maximum value for skip_steps (e.g., 2 means skip_steps can be 1 or 2)
             file_names: List of file_names for each AutoEncoder. Length should be N.
+            seed: Base seed for reproducibility
             bidirectional: Whether to use bidirectional encoder
             **kwargs: Additional keyword arguments for sRLSTMCell
         """
@@ -475,3 +516,4 @@ class ESBLAE(nn.Module):
                     cell.reset_step()
             for cell in autoencoder.decoder.cells:
                 cell.reset_step()
+

@@ -160,6 +160,7 @@ In encoder-decoder architectures, concatenation-based skip connections involve d
 - ECSLAE: Ensemble of Concatenation-based skip (Encoder-Decoder) & Sparsely Connection LSTM and AutoEncoder
 - EVSLAE: Ensemble of Variable skip & Sparsely Connection LSTM and AutoEncoder
 - ESBLAE: Ensemble of Sparsely Connection Bi-directional LSTM and AutoEncoder
+- EASLAE: Ensemble of Attention & Sparsely Connection LSTM and AutoEncoder
 
 # Installation
 ```bash

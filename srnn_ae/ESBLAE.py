@@ -349,7 +349,6 @@ class Decoder(nn.Module):
         return outputs
 
 # AutoEncoder class that combines Encoder and Decoder
-# AutoEncoder class that combines Encoder and Decoder
 class AutoEncoder(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers=1, skip_steps=1,
                  file_name_enc='enc', file_name_dec='dec', partition=1, bidirectional=True, seed=777, **kwargs):

@@ -172,7 +172,7 @@ class Decoder(nn.Module):
         self.output_size = output_size
         self.num_layers = num_layers
 
-        # sRLSTMCell을 다층 구조로 사용하기 위해 ModuleList로 저장
+        # Initialize sLSTMCell layers
         self.cells = nn.ModuleList([
             sLSTMCell(
                 output_size if i == 0 else hidden_size,
@@ -186,8 +186,9 @@ class Decoder(nn.Module):
             )
             for i in range(num_layers)
         ])
-        # 최종 출력을 위한 선형 레이어
-        self.output_layer = nn.Linear(hidden_size, output_size)
+        
+        # Corrected output_layer to accept hidden_size * 2
+        self.output_layer = nn.Linear(hidden_size * 2, output_size)
 
         # Attention layers
         self.attention = nn.Linear(hidden_size * 2, hidden_size)  # For computing attention scores

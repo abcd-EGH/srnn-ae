@@ -170,7 +170,7 @@ class BidirectionalEncoder(nn.Module):
         # Forward and Backward cells for each layer
         self.forward_cells = nn.ModuleList([
             sLSTMCell(
-                input_size if i == 0 else hidden_size * 2,  # Increased input size due to bidirectional concatenation
+                input_size if i == 0 else hidden_size * 2,  # Input size for subsequent layers is hidden_size*2
                 hidden_size,
                 type='enc',
                 component=i+1,
@@ -183,7 +183,7 @@ class BidirectionalEncoder(nn.Module):
         ])
         self.backward_cells = nn.ModuleList([
             sLSTMCell(
-                input_size if i == 0 else hidden_size * 2,
+                input_size if i == 0 else hidden_size * 2,  # Input size for subsequent layers is hidden_size*2
                 hidden_size,
                 type='enc',
                 component=i+1,
@@ -201,58 +201,49 @@ class BidirectionalEncoder(nn.Module):
             inputs: Tensor of shape (seq_len, batch_size, input_size)
         Returns:
             outputs: List of final hidden states for each layer (forward and backward concatenated)
-            states: List of final (h, c) tuples for each layer and direction
+            states: List of final (h, c) tuples for each layer
         """
         batch_size = inputs.size(1)
         seq_len = inputs.size(0)
 
-        # Initialize hidden and cell states for forward and backward
-        h_forward = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
-        c_forward = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
-        states_forward = list(zip(h_forward, c_forward))
+        layer_input = inputs  # 초기 입력
 
-        h_backward = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
-        c_backward = [torch.zeros(batch_size, self.hidden_size, device=inputs.device) for _ in range(self.num_layers)]
-        states_backward = list(zip(h_backward, c_backward))
-
-        # Forward pass
-        forward_outputs = []
-        for t in range(seq_len):
-            input_t = inputs[t]
-            for i, cell in enumerate(self.forward_cells):
-                h_i, c_i = states_forward[i]
-                h_new, (h_i, c_i) = cell(input_t, (h_i, c_i))
-                states_forward[i] = (h_new, c_i)
-                input_t = h_new  # Input for next layer
-            forward_outputs.append(input_t)
-
-        # Backward pass
-        backward_outputs = []
-        for t in reversed(range(seq_len)):
-            input_t = inputs[t]
-            for i, cell in enumerate(self.backward_cells):
-                h_i, c_i = states_backward[i]
-                h_new, (h_i, c_i) = cell(input_t, (h_i, c_i))
-                states_backward[i] = (h_new, c_i)
-                input_t = h_new  # Input for next layer
-            backward_outputs.insert(0, input_t)  # Insert at beginning to maintain order
-
-        # Concatenate forward and backward outputs
-        combined_outputs = []
-        for f_out, b_out in zip(forward_outputs, backward_outputs):
-            combined = torch.cat((f_out, b_out), dim=1)  # Shape: (batch_size, hidden_size*2)
-            combined_outputs.append(combined)
-        combined_outputs = torch.stack(combined_outputs, dim=0)  # Shape: (seq_len, batch_size, hidden_size*2)
-
-        # Concatenate final states from forward and backward
         final_outputs = []
         final_states = []
-        for i in range(self.num_layers):
-            combined_hidden = torch.cat((states_forward[i][0], states_backward[i][0]), dim=1)  # (batch_size, hidden_size*2)
-            final_outputs.append(combined_hidden)
-            combined_state = (torch.cat((states_forward[i][0], states_backward[i][0]), dim=1),
-                              torch.cat((states_forward[i][1], states_backward[i][1]), dim=1))
-            final_states.append(combined_state)
+
+        for layer in range(self.num_layers):
+            # Forward pass for current layer
+            h_forward = torch.zeros(batch_size, self.hidden_size, device=inputs.device)
+            c_forward = torch.zeros(batch_size, self.hidden_size, device=inputs.device)
+            forward_outputs = []
+            for t in range(seq_len):
+                input_t = layer_input[t]
+                h_forward, (h_forward, c_forward) = self.forward_cells[layer](input_t, (h_forward, c_forward))
+                forward_outputs.append(h_forward)
+
+            # Backward pass for current layer
+            h_backward = torch.zeros(batch_size, self.hidden_size, device=inputs.device)
+            c_backward = torch.zeros(batch_size, self.hidden_size, device=inputs.device)
+            backward_outputs = []
+            for t in reversed(range(seq_len)):
+                input_t = layer_input[t]
+                h_backward, (h_backward, c_backward) = self.backward_cells[layer](input_t, (h_backward, c_backward))
+                backward_outputs.insert(0, h_backward)  # 역순으로 삽입
+
+            # Concatenate forward and backward outputs
+            forward_outputs = torch.stack(forward_outputs, dim=0)  # (seq_len, batch_size, hidden_size)
+            backward_outputs = torch.stack(backward_outputs, dim=0)  # (seq_len, batch_size, hidden_size)
+            layer_output = torch.cat((forward_outputs, backward_outputs), dim=2)  # (seq_len, batch_size, hidden_size*2)
+
+            # Update for next layer
+            layer_input = layer_output
+
+            # Concatenate final hidden and cell states
+            combined_h = torch.cat((h_forward, h_backward), dim=1)  # (batch_size, hidden_size*2)
+            combined_c = torch.cat((c_forward, c_backward), dim=1)  # (batch_size, hidden_size*2)
+
+            final_outputs.append(combined_h)
+            final_states.append((combined_h, combined_c))
 
         return final_outputs, final_states
 
@@ -306,11 +297,14 @@ class Decoder(nn.Module):
         self.num_layers = num_layers
         self.bidirectional_encoder = bidirectional_encoder
 
+        # Adjust hidden_size based on bidirectionality
+        decoder_hidden_size = hidden_size if not bidirectional_encoder else hidden_size * 2
+
         # Initialize the Decoder's sLSTMCells with the adjusted hidden_size
         self.cells = nn.ModuleList([
             sLSTMCell(
-                output_size if i == 0 else hidden_size,
-                hidden_size,
+                input_size=output_size if i == 0 else decoder_hidden_size,
+                hidden_size=decoder_hidden_size,
                 type='dec',
                 component=i+1,
                 partition=partition,
@@ -322,8 +316,8 @@ class Decoder(nn.Module):
             for i in range(num_layers)
         ])
         
-        # Final output layer remains the same
-        self.output_layer = nn.Linear(hidden_size, output_size)
+        # Final output layer
+        self.output_layer = nn.Linear(decoder_hidden_size, output_size)
 
     def forward(self, targets, encoder_states):
         """
@@ -355,6 +349,7 @@ class Decoder(nn.Module):
         return outputs
 
 # AutoEncoder class that combines Encoder and Decoder
+# AutoEncoder class that combines Encoder and Decoder
 class AutoEncoder(nn.Module):
     def __init__(self, input_size, hidden_size, output_size, num_layers=1, skip_steps=1,
                  file_name_enc='enc', file_name_dec='dec', partition=1, bidirectional=True, seed=777, **kwargs):
@@ -375,7 +370,7 @@ class AutoEncoder(nn.Module):
         decoder_hidden_size = hidden_size * 2 if bidirectional else hidden_size
         
         self.decoder = Decoder(
-            hidden_size=decoder_hidden_size,  # Use adjusted hidden size
+            hidden_size=hidden_size,  # Use original hidden_size
             output_size=output_size,
             num_layers=num_layers,
             skip_steps=skip_steps,

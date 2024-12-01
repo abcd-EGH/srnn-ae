@@ -299,14 +299,20 @@ class Encoder(nn.Module):
 
 # Decoder class
 class Decoder(nn.Module):
-    def __init__(self, hidden_size, output_size, num_layers=1, skip_steps=1, file_name='dec', partition=1, bidirectional_encoder=False, seed=None, **kwargs):
+    def __init__(self, hidden_size, output_size, num_layers=1, skip_steps=1, 
+                 file_name='dec', partition=1, bidirectional_encoder=False, seed=None, **kwargs):
         super(Decoder, self).__init__()
         self.hidden_size = hidden_size
         self.output_size = output_size
         self.num_layers = num_layers
         self.bidirectional_encoder = bidirectional_encoder
 
-        # Initialize the Decoder's sLSTMCells with the adjusted hidden_size
+        # 인코더의 hidden_size가 16일 경우, 이를 8로 변환하는 선형 레이어 추가
+        if bidirectional_encoder:
+            self.encoder_proj = nn.Linear(hidden_size * 2, hidden_size)
+            nn.init.xavier_normal_(self.encoder_proj.weight)
+            nn.init.zeros_(self.encoder_proj.bias)
+
         self.cells = nn.ModuleList([
             sLSTMCell(
                 output_size if i == 0 else hidden_size,
@@ -322,8 +328,9 @@ class Decoder(nn.Module):
             for i in range(num_layers)
         ])
         
-        # Final output layer remains the same
         self.output_layer = nn.Linear(hidden_size, output_size)
+        nn.init.xavier_normal_(self.output_layer.weight)
+        nn.init.zeros_(self.output_layer.bias)
 
     def forward(self, targets, encoder_states):
         """
@@ -336,9 +343,14 @@ class Decoder(nn.Module):
         batch_size = targets.size(1)
         seq_len = targets.size(0)
 
-        # Initialize hidden and cell states with encoder's final states
-        h = [state[0].detach() for state in encoder_states]
-        c = [state[1].detach() for state in encoder_states]
+        # 인코더의 hidden_states를 디코더의 hidden_size에 맞게 변환
+        if self.bidirectional_encoder:
+            h = [self.encoder_proj(state[0].detach()) for state in encoder_states]
+            c = [self.encoder_proj(state[1].detach()) for state in encoder_states]
+        else:
+            h = [state[0].detach() for state in encoder_states]
+            c = [state[1].detach() for state in encoder_states]
+        
         states = list(zip(h, c))
 
         outputs = []
@@ -348,7 +360,7 @@ class Decoder(nn.Module):
                 h_i, c_i = states[i]
                 h_i, (h_i, c_i) = cell(input_t, (h_i, c_i))
                 states[i] = (h_i, c_i)
-                input_t = h_i  # Pass to next layer
+                input_t = h_i  # 다음 레이어의 입력으로 현재 레이어의 출력을 사용
             output_t = self.output_layer(input_t)
             outputs.append(output_t)
         outputs = torch.stack(outputs, dim=0)

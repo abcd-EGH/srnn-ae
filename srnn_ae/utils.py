@@ -93,9 +93,9 @@ def hyperparameter_setting(**kwargs):
             num_layers: int, default=1
             limit_skip_steps: int, default=10
             learning_rate: float, default=1e-3
-            l1_lambda: float, default=0.005
-            batch_size: int, default=32
-            window_size: int, default=10
+            l1_lambda: float, default=1e-5
+            batch_size: int, default=18
+            window_size: int, default=36
             num_epochs: int, default=100
     Returns:
         args: dict, hyperparameters
@@ -108,10 +108,10 @@ def hyperparameter_setting(**kwargs):
     args['num_layers'] = kwargs['num_layers'] if 'num_layers' in kwargs else 1 # No mention in the paper
     args['limit_skip_steps'] = kwargs['limit_skip_steps'] if 'limit_skip_steps' in kwargs else 10 # L: 1~10 랜덤
     args['learning_rate'] = kwargs['learning_rate'] if 'learning_rate' in kwargs else 1e-3
-    args['l1_lambda'] = kwargs['l1_lambda'] if 'l1_lambda' in kwargs else 0.005
+    args['l1_lambda'] = kwargs['l1_lambda'] if 'l1_lambda' in kwargs else 1e-5
     args['batch_size'] = kwargs['batch_size'] if 'batch_size' in kwargs else 18 # No mention in the paper
-    args['window_size'] = kwargs['window_size'] if 'window_size' in kwargs else 288
-    args['num_epochs'] = kwargs['num_epochs'] if 'num_epochs' in kwargs else 20 # No mention in the paper
+    args['window_size'] = kwargs['window_size'] if 'window_size' in kwargs else 36 # No mention in the paper
+    args['num_epochs'] = kwargs['num_epochs'] if 'num_epochs' in kwargs else 1000 # No mention in the paper
     args['random_seed'] = kwargs['random_seed'] if 'random_seed' in kwargs else 777
 
     return args
